@@ -1,0 +1,9 @@
+[package]
+name = "lunash"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+directories = "6.0.0"
+mlua = { version = "0.10.5", features = ["luajit", "vendored"] }
+reqwest = { version = "0.12.19", features = ["native-tls-vendored", "blocking"] }
