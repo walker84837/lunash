@@ -2,22 +2,18 @@ use std::{
     env, fs,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
-    thread,
 };
 
 use clap::{Parser, Subcommand};
 
 use directories::ProjectDirs;
-use mlua::{
-    Function, Lua, LuaOptions, RegistryKey, StdLib, Table, ThreadStatus, UserData, UserDataFields,
-    UserDataMethods, Value, prelude::*,
-};
+use mlua::{Lua, LuaOptions, StdLib, UserData, UserDataFields, UserDataMethods};
 use regex::Regex;
 use reqwest::blocking::Client;
 
 struct FsUtils;
 struct StringUtils;
-struct RegexUtils;
+struct RegexWrapper(Regex);
 struct HttpModule {
     client: Arc<Mutex<Client>>,
 }
@@ -65,23 +61,15 @@ impl UserData for StringUtils {
     }
 }
 
-impl UserData for RegexUtils {
+impl UserData for RegexWrapper {
     fn add_methods<'lua, M: UserDataMethods<Self>>(methods: &mut M) {
-        methods.add_function("new", |_, pattern: String| {
-            Regex::new(&pattern)
-                .map(|re| re)
-                .map_err(|e| mlua::Error::RuntimeError(e.to_string()))
+        methods.add_method("is_match", |_, this, text: String| {
+            Ok(this.0.is_match(&text))
         });
 
-        methods.add_function("is_match", |_, (re, text): (mlua::String, String)| {
-            let re: Regex = Regex::new(re.to_str()?)?;
-            Ok(re.is_match(&text))
-        });
-
-        methods.add_function("captures", |lua, (re, text): (mlua::String, String)| {
-            let re = Regex::new(re.to_str()?)?;
-            let mut table = lua.create_table()?;
-            if let Some(caps) = re.captures(&text) {
+        methods.add_method("captures", |lua, this, text: String| {
+            let table = lua.create_table()?;
+            if let Some(caps) = this.0.captures(&text) {
                 for (i, cap) in caps.iter().enumerate() {
                     if let Some(cap) = cap {
                         table.set(i + 1, cap.as_str())?;
@@ -102,7 +90,7 @@ impl UserData for HttpModule {
 
             let response = client
                 .lock()
-                .unwrap()
+                .map_err(|_| mlua::Error::RuntimeError("HTTP client lock poisoned".into()))?
                 .get(&url)
                 .send()
                 .map_err(|e| mlua::Error::RuntimeError(e.to_string()))?;
@@ -121,7 +109,7 @@ impl UserData for HttpModule {
 
             let response = client
                 .lock()
-                .unwrap()
+                .map_err(|_| mlua::Error::RuntimeError("HTTP client lock poisoned".into()))?
                 .post(&url)
                 .body(body)
                 .send()
@@ -192,58 +180,45 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let script_path = find_script(program_name)
                 .ok_or_else(|| format!("Script for '{}' not found", program_name))?;
 
-            // create shared HTTP client
             let http_client = Arc::new(Mutex::new(Client::new()));
 
-            // create Lua context in a separate thread
-            thread::spawn(move || {
-                let lua =
-                    Lua::new_with(StdLib::ALL_SAFE, LuaOptions::new().catch_rust_panics(true))
-                        .expect("Failed to create Lua context");
+            let lua = Lua::new_with(StdLib::ALL_SAFE, LuaOptions::new().catch_rust_panics(true))?;
 
-                lua.set_app_data(Arc::clone(&http_client));
+            lua.set_app_data(Arc::clone(&http_client));
 
-                lua.context(|ctx| {
-                    // load standard libraries
-                    ctx.load(StdLib::TABLE);
-                    ctx.load(StdLib::STRING);
-                    ctx.load(StdLib::MATH);
-                    ctx.load(StdLib::OS);
-                    ctx.load(StdLib::BIT);
+            let globals = lua.globals();
+            globals.set("fs", FsUtils)?;
+            globals.set("stringx", StringUtils)?;
 
-                    // register custom modules
-                    let globals = ctx.globals();
-                    globals.set("fs", FsUtils)?;
-                    globals.set("stringx", StringUtils)?;
-                    globals.set("regex", RegexUtils)?;
-                    globals.set(
-                        "http",
-                        HttpModule {
-                            client: Arc::clone(&http_client),
-                        },
-                    )?;
+            // Add regex module with constructor
+            let _ = globals.set(
+                "regex",
+                lua.create_function(|_, pattern: String| {
+                    Regex::new(&pattern)
+                        .map(RegexWrapper)
+                        .map_err(|e| mlua::Error::RuntimeError(e.to_string()))
+                })?,
+            );
 
-                    // create arg table
-                    let arg_table = ctx.create_table()?;
-                    for (i, arg) in args.iter().enumerate() {
-                        arg_table.set(i, arg.as_str())?;
-                    }
-                    globals.set("arg", arg_table)?;
+            globals.set(
+                "http",
+                HttpModule {
+                    client: Arc::clone(&http_client),
+                },
+            )?;
 
-                    // load and execute script
-                    let script = fs::read_to_string(&script_path)
-                        .map_err(|e| mlua::Error::RuntimeError(e.to_string()))?;
+            let arg_table = lua.create_table()?;
+            for (i, arg) in args.iter().enumerate() {
+                arg_table.set(i + 1, arg.as_str())?;
+            }
+            globals.set("arg", arg_table)?;
 
-                    let chunk = ctx.load(&script).set_name(&script_path.to_string_lossy())?;
+            let script = fs::read_to_string(&script_path)
+                .map_err(|e| mlua::Error::RuntimeError(e.to_string()))?;
 
-                    chunk.exec()?;
-
-                    Ok(())
-                })
-                .expect("Lua execution failed");
-            })
-            .join()
-            .expect("Lua thread panicked");
+            lua.load(&script)
+                .set_name(script_path.to_string_lossy().to_string())
+                .exec()?;
         }
     }
 
