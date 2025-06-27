@@ -14,6 +14,8 @@ use reqwest::blocking::Client;
 struct FsUtils;
 struct StringUtils;
 struct RegexWrapper(Regex);
+
+#[allow(dead_code)]
 struct HttpModule {
     client: Arc<Mutex<Client>>,
 }
@@ -83,7 +85,7 @@ impl UserData for RegexWrapper {
 
 impl UserData for HttpModule {
     fn add_methods<'lua, M: UserDataMethods<Self>>(methods: &mut M) {
-        methods.add_function("get", |lua, url: String| {
+        methods.add_method("get", |lua, _, url: String| {
             let client = lua
                 .app_data_ref::<Arc<Mutex<Client>>>()
                 .ok_or_else(|| mlua::Error::RuntimeError("HTTP client not available".into()))?;
@@ -102,7 +104,7 @@ impl UserData for HttpModule {
             lua.create_string(&text)
         });
 
-        methods.add_function("post", |lua, (url, body): (String, String)| {
+        methods.add_method("post", |lua, _, (url, body): (String, String)| {
             let client = lua
                 .app_data_ref::<Arc<Mutex<Client>>>()
                 .ok_or_else(|| mlua::Error::RuntimeError("HTTP client not available".into()))?;
@@ -134,7 +136,7 @@ fn find_script(program_name: &str) -> Option<PathBuf> {
     }
 
     // check user scripts directory
-    if let Some(proj_dirs) = ProjectDirs::from("", "", "lunash") {
+    if let Some(proj_dirs) = ProjectDirs::from("org", "winlogon", "lunash") {
         let user_script = proj_dirs
             .data_local_dir()
             .join("scripts")
