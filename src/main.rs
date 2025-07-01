@@ -14,6 +14,7 @@ use reqwest::blocking::Client;
 struct FsUtils;
 struct StringUtils;
 struct RegexWrapper(Regex);
+struct ClipboardHandling;
 
 #[allow(dead_code)]
 struct HttpModule {
@@ -126,6 +127,45 @@ impl UserData for HttpModule {
     }
 }
 
+impl UserData for ClipboardHandling {
+    fn add_methods<'lua, M: UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_method("set", |_, _, text: String| {
+            let mut clipboard =
+                arboard::Clipboard::new().map_err(|e| mlua::Error::RuntimeError(e.to_string()))?;
+            clipboard
+                .set_text(text)
+                .map_err(|e| mlua::Error::RuntimeError(e.to_string()))?;
+            Ok(())
+        });
+
+        methods.add_method("get", |lua, _, _: ()| {
+            let mut clipboard =
+                arboard::Clipboard::new().map_err(|e| mlua::Error::RuntimeError(e.to_string()))?;
+            let content = clipboard
+                .get_text()
+                .map_err(|e| mlua::Error::RuntimeError(e.to_string()))?;
+            lua.create_string(&content)
+        });
+
+        methods.add_method("get_image", |lua, _, _: ()| {
+            let mut clipboard =
+                arboard::Clipboard::new().map_err(|e| mlua::Error::RuntimeError(e.to_string()))?;
+            let image = clipboard
+                .get_image()
+                .map_err(|e| mlua::Error::RuntimeError(e.to_string()))?;
+
+            let img_data = image.bytes.into_owned();
+
+            let table = lua.create_table()?;
+            table.set("width", image.width)?;
+            table.set("height", image.height)?;
+            table.set("bytes", img_data)?;
+
+            Ok(table)
+        });
+    }
+}
+
 fn find_script(program_name: &str) -> Option<PathBuf> {
     let script_name = format!("{}.{}.lua", program_name, env!("CARGO_PKG_NAME"));
 
@@ -191,6 +231,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let globals = lua.globals();
             globals.set("fs", FsUtils)?;
             globals.set("stringx", StringUtils)?;
+            globals.set("clipboard", ClipboardHandling)?;
 
             // Add regex module with constructor
             let _ = globals.set(

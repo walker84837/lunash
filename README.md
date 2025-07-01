@@ -69,6 +69,19 @@ $ cargo r -q -- run http-request
   - `regex:is_match(string text)`: returns whether the regex matches the text
   - `regex:find(string text)`: returns a table containing the captured groups from the text
 
+### `clipboard` module
+
+- `clipboard:copy(string text)`: copies the text to the clipboard
+- `clipboard:get()`: returns the text from the clipboard
+- `clipboard:get_image()`: returns a table with pasted image data:
+```lua
+{
+  "width": number,
+  "height": number,
+  "data": string -- image data
+}
+```
+
 ## Roadmap
 
 - [ ] Add overloads for HTTP requests (or an optional constructor?) for specifying things such as API keys, etc.
@@ -78,7 +91,7 @@ $ cargo r -q -- run http-request
   - DELETE
   - PATCH
   - [Other](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Methods) methods...?
-
+- [ ] Generalized logging with log levels and templates
 
 ## License
 
